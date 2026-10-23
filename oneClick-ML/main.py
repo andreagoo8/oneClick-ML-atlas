@@ -14,7 +14,7 @@ from lib.utils import create_result_dirs, generate_paths, load_config, load_data
 from lib.pipeline import define_pipeline, evaluate_model, get_final_transformed_test_data, get_score, my_grid_search
 
 def main(config_file)->int:
-    
+
     # reproducibility settings
     random_state = 42
     random.seed(0)
@@ -22,7 +22,7 @@ def main(config_file)->int:
 
     # load config dictionary from config path
     config = load_config(config_file)
-    
+
     # load parameter distributions for gridsearch
     param_distributions = load_param_distributions('params.yaml')
 
@@ -49,14 +49,14 @@ def main(config_file)->int:
 
         res_dir_cl, feat_dir, shap_dir = create_result_dirs(res_dir, classifier, config['shap_analysis'], config['perm_importance'])
         print('-----------------------------------')
-        print(f'Running gridsearch on {classifier}')  
-        
+        print(f'Running gridsearch on {classifier}')
+
 
         # pipeline definition
-        pipeline, param_dist = define_pipeline(classifier, param_distribution=param_distributions, 
+        pipeline, param_dist = define_pipeline(classifier, param_distribution=param_distributions,
                                                handle_imb_data = config['handle_imb_data'],
-                                               include_feature_selector = config['include_feature_selector'], 
-                                               n_of_features = config['n_of_features'], 
+                                               include_feature_selector = config['include_feature_selector'],
+                                               n_of_features = config['n_of_features'],
                                                feature_types = feature_types, random_state=random_state)
 
 
@@ -76,11 +76,11 @@ def main(config_file)->int:
         for rs in rs_list:
 
             X_train, X_test, y_train, y_test = train_test_split(X, y, stratify=strat_col, test_size=config['train_test_split_size'], random_state=rs)
-            
-            
+
+
             # run grid search
-            grid_model = my_grid_search(X_train, y_train, pipeline, param_dist, config['n_jobs'], verbose=True, 
-                                        refit_metric=config['refit'], scoring=get_score(), 
+            grid_model = my_grid_search(X_train, y_train, pipeline, param_dist, config['n_jobs'], verbose=True,
+                                        refit_metric=config['refit'], scoring=get_score(),
                                         cv_repeats=config['cv_repeats'], cv_splits=config['cv_splits'], n_iter=config['n_iter'], random_state=random_state)
 
             X_test_idx_list.append(X_test.index)
@@ -89,7 +89,7 @@ def main(config_file)->int:
             # test best model
             y_pred, y_pred_proba, metrics, tpr_interp, roc_auc = evaluate_model(grid_model, X_test, y_test, fpr_common)
 
-            # append results 
+            # append results
             pred_y_list.append(y_pred)
             pred_prob_list.append(y_pred_proba)
             real_y_list.append(y_test)
@@ -116,34 +116,85 @@ def main(config_file)->int:
                                         scoring=make_scorer(matthews_corrcoef, greater_is_better=True))
                 perm_imp_list.append(np.mean(perm.importances, axis=1))
 
-        
+
         print(f'Saving metrics in {res_dir_cl}')
         # feature importances saving
         if config['perm_importance']:
             store_importances(feat_dir, perm_imp_list, feature_names_orig=X.columns)
         if config['shap_analysis']:
             shap_anaysis(shap_dir, shap_val_list, shap_data_list)
-        
+
         # Save performances
         store_classification_metrics(test_metrics_list, test_metrics, best_train_metrics_list, train_metrics, best_params_list, res_dir_cl)
-        
+
         # store raw results
         save_raw_results(X_test_idx_list, real_y_list, pred_y_list, pred_prob_list, res_dir_cl)
         get_patient_prob_results(X.index, X_test_idx_list, pred_prob_list, rs_list, res_dir_cl)
-        
+
         # plot mean cm
         mean_roc_curve_plot(tpr_list, roc_auc_list, fpr_common, res_dir_cl)
 
-        
-       
+
+
     return 0
 
 
 if __name__ == "__main__":
-	parser = argparse.ArgumentParser(description="Run analysis with optional configuration.")
-	
-	parser.add_argument("--config", type=str, help="Path to the configuration file")
-	
-	args = parser.parse_args()
-	
-	sys.exit(main(config_file=args.config))
+    parser = argparse.ArgumentParser(description="Run analysis with optional configuration.")
+
+    parser.add_argument("--config", type=str, help="Path to the configuration file")
+
+    args = parser.parse_args()
+
+    sys.exit(main(config_file=args.config))
+
+### --- LINES ADDED FOR THE USE OF ATLAS --- ###
+
+import os
+from os import path
+
+file_basepath = "local_data"
+
+def helper_main(
+    project,
+
+# Place here the name of the data and config objects that has been created and fetched in the notebook
+    csv_file,
+    config_file,
+    output_artifact_name
+    ):
+
+    try:
+
+# Create a Path object for "local_data", and if that directory doesn't already exist, create it
+        base_dir = pathlib.Path(file_basepath)
+        if not base_dir.exists():
+            base_dir.mkdir(parents=True, exist_ok=True)
+
+# Define three subdirectory paths under base_dir, and create them if they don't already exist
+        data_dir = base_dir / 'data'
+        config_dir = base_dir / 'config'
+        output_dir = base_dir / 'results'
+
+
+        if not data_dir.exists():
+            data_dir.mkdir(parents=True, exist_ok=True)
+        if not output_dir.exists():
+            output_dir.mkdir(parents=True, exist_ok=True)
+        if not config_dir.exists():
+            config_dir.mkdir(parents=True, exist_ok=True)
+
+# Use the 'di' object to download data into data_dir (converted to a string path), overwriting existing files if present
+        data_dir = pathlib.Path(di.download(str(data_dir), overwrite=True))
+
+# Use the 'config_file' object to download data into data_dir (converted to a string path), overwriting existing files if present
+        config_path = pathlib.Path(config_file.download(str(config_dir), overwrite=True))
+
+# Calls the original main function
+        main(config_file=str(config_path))
+
+# Places the outputs in a digitalhub model
+        project.log_artifact(name=output_artifact_name, kind="model", source=str(output_dir))
+
+    except Exception as e:
+        print(f"Error during training: {e}")
