@@ -185,7 +185,7 @@ def helper_main(
             config_dir.mkdir(parents=True, exist_ok=True)
 
 # Use the 'di' object to download data into data_dir (converted to a string path), overwriting existing files if present
-        data_dir = pathlib.Path(di.download(str(data_dir), overwrite=True))
+        data_dir = pathlib.Path(csv_file.download(str(data_dir), overwrite=True))
 
 # Use the 'config_file' object to download data into data_dir (converted to a string path), overwriting existing files if present
         config_path = pathlib.Path(config_file.download(str(config_dir), overwrite=True))
