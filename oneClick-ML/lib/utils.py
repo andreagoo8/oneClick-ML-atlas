@@ -112,8 +112,8 @@ def save_config(config, res_dir):
 		# General values
 		file.write("General values:\n")
 		file.write(f"    - Y Label: {config['y_label']}\n")
-		file.write(f'    - Columns to drop: {config['col_to_drop']}\n')
-		file.write(f'    - Path to feature types list: {config['path_to_feature_types']}\n')
+		file.write(f"    - Columns to drop: {config['col_to_drop']}\n")
+		file.write(f"    - Path to feature types list: {config['path_to_feature_types']}\n")
 		file.write(f"	 - output path: {config['output_path']}\n")
 		file.write(f"    - input path: {config['input_path']}\n")
 		file.write(f"    - Feature selection: {config['include_feature_selector']}\n")
