@@ -13,13 +13,13 @@ Install a `dhcli` release compatible with Digitalhub 0.15 for your operating sys
 and architecture, extract it, and put the executable on `PATH`. See the official
 [installation instructions](https://scc-digitalhub.github.io/docs/0.15/cli/installation/)
 and [release downloads](https://github.com/scc-digitalhub/digitalhub-cli/releases).
-The local tools used below are Bash, Python 3 (only its standard library), and
-`jq`. The ML dependencies are installed in the cluster image during the build.
+The commands below use Bash and `dhcli`. The ML code is already implemented;
+there is no local Python orchestration or JSON parser to install. Function and
+run settings are supplied as YAML files. Dependencies are installed in the
+cluster image during the build.
 
 ```bash
 dhcli --version
-python3 --version
-jq --version
 mkdir -p dhcli
 export PROJECT_NAME='oneclick-ml-atlas'
 ```
@@ -42,7 +42,8 @@ Prepare `oneClick-ML/data.csv` and edit `oneClick-ML/config.ini` before uploadin
   fallback when lists are absent, so check that this behavior suits your data.
 
 `params.yaml` is also required: `main.py` opens it using a relative path. The
-archive prepared in step 4 puts it next to `main.py` and `lib/`, at its root.
+code archive used in step 4 must contain it next to `main.py` and `lib/`,
+at its root.
 
 ## 2. Connect to Digitalhub and create or retrieve the project
 
@@ -102,134 +103,132 @@ dhcli upload -p "$PROJECT_NAME" artifact \
 ```
 
 If these inputs are already registered and you want to reuse them, skip the
-uploads. In either case, fetch their metadata, corresponding to
+uploads. In either case, retrieve them, corresponding to
 `project.get_artifact(...)`:
 
 ```bash
-dhcli get -p "$PROJECT_NAME" -o json artifacts -n csv_input_data \
-  > dhcli/csv-artifact.json
-dhcli get -p "$PROJECT_NAME" -o json artifacts -n config_ini_file \
-  > dhcli/config-artifact.json
-jq '{id, name, state: .status.state, path: .spec.path}' dhcli/csv-artifact.json
-jq '{id, name, state: .status.state, path: .spec.path}' dhcli/config-artifact.json
+dhcli get -p "$PROJECT_NAME" artifacts -n csv_input_data
+dhcli get -p "$PROJECT_NAME" artifacts -n config_ini_file
 ```
 
-Both artifacts must be `READY`. Record their version-specific entity keys, the
-equivalent of `csv_data.key` and `config_data.key` in the notebook:
+Both artifacts must show `State: READY`. Copy the `Key:` value printed by each
+command into these variables, replacing the placeholders. This is the equivalent
+of reading `csv_data.key` and `config_data.key` in the notebook:
 
 ```bash
-export CSV_KEY="$(jq -er '"\(.kind)://\(.project)/\(.name):\(.id)"' dhcli/csv-artifact.json)"
-export CONFIG_KEY="$(jq -er '"\(.kind)://\(.project)/\(.name):\(.id)"' dhcli/config-artifact.json)"
-printf '%s\n' "$CSV_KEY" "$CONFIG_KEY"
+export CSV_KEY='<Key printed for csv_input_data>'
+export CONFIG_KEY='<Key printed for config_ini_file>'
 ```
 
 Keys have the form `artifact://oneclick-ml-atlas/csv_input_data:<id>`. They identify
 catalog objects; S3 paths identify stored files. The job's `inputs` need entity
-keys. To select an older version, list versions and replace `-n name` above with
-its ID, then recalculate the keys:
+keys. To select an older version, list versions and replace `-n name` in the
+`get` commands with its ID, then copy that version's key:
 
 ```bash
 dhcli list -p "$PROJECT_NAME" artifacts -n csv_input_data
 dhcli list -p "$PROJECT_NAME" artifacts -n config_ini_file
 ```
 
-## 4. Understand, package, and declare the main helper function
+## 4. Declare or retrieve the main helper function
 
 A Digitalhub function describes reusable executable code. Registration, image
-building, and execution are separate operations. Here the registered handler is
-the existing `helper_main` in `oneClick-ML/main.py`. At runtime it receives the
-project automatically, downloads the two input artifacts, calls the original ML
-program, and logs `local_data/results` as `output_data`.
+building, and execution are separate operations. The handler is the existing
+`helper_main` in `oneClick-ML/main.py`. It receives the project automatically,
+downloads the input artifacts, calls the ML program, and logs
+`local_data/results` as an output artifact. None of that code needs rewriting.
 
-The notebook's SDK call prepares its local `code_src` directory for remote use.
-For the CLI, explicitly package the local source and upload it. Digitalhub
-supports [S3 ZIP sources](https://scc-digitalhub.github.io/sdk-docs/0.15/reference/configuration/code_src/s3/)
-using `zip+s3://...` and a `module:callable` handler. This captures local edits
-without requiring a Git push.
-
-Create a ZIP with `main.py`, `params.yaml`, `requirements.txt`, `lib/`, and any
-feature lists at the archive root. Inputs remain separate artifacts:
+**If `main_function` is already registered with the correct source and
+dependencies**, skip source upload and declaration below. Retrieve it:
 
 ```bash
-python3 - <<'PY'
-from pathlib import Path
-from zipfile import ZipFile, ZIP_DEFLATED
+dhcli get -p "$PROJECT_NAME" functions -n main_function
+```
 
-root = Path('oneClick-ML')
-files = [root / name for name in ('main.py', 'params.yaml', 'requirements.txt')]
-files += sorted((root / 'lib').rglob('*.py'))
-files += sorted((root / 'feature_list_types').rglob('*.csv'))
-with ZipFile('dhcli/oneclick-source.zip', 'w', ZIP_DEFLATED) as archive:
-    for path in files:
-        archive.write(path, path.relative_to(root))
-PY
+Copy its printed `ID:` into `FUNCTION_ID`:
 
+```bash
+export FUNCTION_ID='<function-id>'
+```
+
+Use this same ID for building and running. If you want a specific version, use
+its ID instead of `-n main_function`. Continue with step 5, or step 6 if this
+version already has a built image.
+
+### First registration: use the existing code archive
+
+For a function that is not registered yet, the source must be accessible to the
+cluster. Digitalhub supports
+[S3 ZIP sources](https://scc-digitalhub.github.io/sdk-docs/0.15/reference/configuration/code_src/s3/)
+with a `module:callable` handler. Use your existing ZIP containing `main.py`,
+`params.yaml`, `requirements.txt`, `lib/`, and any feature lists at its root.
+The wrapper folder `oneClick-ML/` must not surround these files inside the ZIP
+when using `main:helper_main`.
+
+If the archive is already in platform storage, skip this upload and use its S3
+file path directly. Otherwise, upload the existing archive:
+
+```bash
+export SOURCE_ARCHIVE='<path-to-existing-code.zip>'
 dhcli upload -p "$PROJECT_NAME" artifact \
-  -n oneclick_source -f dhcli/oneclick-source.zip
-dhcli get -p "$PROJECT_NAME" -o json artifacts -n oneclick_source \
-  > dhcli/source-artifact.json
-export SOURCE_PATH="$(jq -er '.spec.path' dhcli/source-artifact.json)"
+  -n oneclick_source -f "$SOURCE_ARCHIVE"
+dhcli get -p "$PROJECT_NAME" -o yaml artifacts -n oneclick_source
 ```
 
-Check that this source artifact is `READY` and its path is the uploaded ZIP's
-`s3://.../oneclick-source.zip` address:
+Check that the artifact is `READY`. Copy `spec.path` from the YAML output into
+`SOURCE_PATH` (the `s3://.../file.zip` address, not the artifact key):
 
 ```bash
-jq '{id, state: .status.state, path: .spec.path}' dhcli/source-artifact.json
+export SOURCE_PATH='<s3://bucket/path/to/code.zip>'
 ```
 
-Generate `dhcli/main-function.yaml`. JSON is valid YAML, so this uses Python's
-standard library to serialize the definition and all dependency pins without
-requiring a local Digitalhub SDK installation. Unlike the SDK's convenience
-argument, the CLI definition contains the actual requirements list rather than
-the path to a local requirements file.
+If the code is only in the local folder and has not been archived, this optional
+command creates an archive using the `zip` utility. Then upload it as above:
 
 ```bash
-python3 - <<'PY'
-import json
-import os
-from pathlib import Path
+(
+  cd oneClick-ML
+  zip -r ../dhcli/oneclick-source.zip main.py params.yaml requirements.txt lib
+  if [ -d feature_list_types ]; then
+    zip -r ../dhcli/oneclick-source.zip feature_list_types
+  fi
+)
+```
 
-source_path = os.environ['SOURCE_PATH']
-if not source_path.startswith('s3://') or not source_path.endswith('.zip'):
-    raise ValueError('SOURCE_PATH must point to the uploaded S3 ZIP file')
-requirements = [
-    line.strip()
-    for line in Path('oneClick-ML/requirements.txt').read_text().splitlines()
-    if line.strip() and not line.lstrip().startswith('#')
-]
-definition = {
-    'kind': 'python',
-    'name': 'main_function',
-    'project': os.environ['PROJECT_NAME'],
-    'spec': {
-        'python_version': 'PYTHON3_10',
-        'requirements': requirements,
-        'source': {
-            'lang': 'python',
-            'source': 'zip+' + source_path,
-            'handler': 'main:helper_main',
-        },
-    },
-}
-Path('dhcli/main-function.yaml').write_text(json.dumps(definition, indent=2) + '\n')
-PY
+Create the function definition. The Bash loop copies the existing dependency
+pins into a YAML list; it does not execute Python or alter the ML code. The CLI
+needs dependency values in the definition, rather than a workspace-only path to
+`requirements.txt`.
+
+```bash
+cat > dhcli/main-function.yaml <<YAML
+kind: python
+name: main_function
+project: "$PROJECT_NAME"
+spec:
+  python_version: PYTHON3_10
+  source:
+    lang: python
+    source: "zip+$SOURCE_PATH"
+    handler: main:helper_main
+  requirements:
+YAML
+
+while IFS= read -r requirement || [ -n "$requirement" ]; do
+  case "$requirement" in
+    ''|\#*) continue ;;
+  esac
+  printf '    - "%s"\n' "$requirement" >> dhcli/main-function.yaml
+done < oneClick-ML/requirements.txt
 
 dhcli create -p "$PROJECT_NAME" functions -f dhcli/main-function.yaml
-dhcli get -p "$PROJECT_NAME" -o json functions -n main_function \
-  > dhcli/main-function.json
-export FUNCTION_ID="$(jq -er '.id' dhcli/main-function.json)"
+dhcli get -p "$PROJECT_NAME" functions -n main_function
 ```
 
-The nested `spec.source.source` and `spec.source.handler` fields are the serialized
-form of the SDK's `code_src` and `handler` arguments; see the version 0.15
+Copy the new `ID:` into `FUNCTION_ID` as shown above. The nested
+`spec.source.source` and `spec.source.handler` fields represent the SDK's
+`code_src` and `handler` arguments; see the version 0.15
 [source schema](https://github.com/scc-digitalhub/digitalhub-sdk-runtime-python/blob/0.15.0/digitalhub_runtime_python/entities/function/python/models.py).
-The function retains every dependency in the repository's requirements file.
-
-If the function already exists and its source and dependencies are suitable,
-skip packaging and creation: run only the `get` and `FUNCTION_ID` commands above.
-Use a specific ID instead of `-n main_function` to retrieve a known version.
-Pinning the ID also ensures the build and job use the same function version.
 
 ## 5. Build the main helper function
 
@@ -268,40 +267,33 @@ After completion, fetch the function again to get the image reference, replacing
 `main_func.refresh().spec.image`:
 
 ```bash
-dhcli get -p "$PROJECT_NAME" -o json functions "$FUNCTION_ID" \
-  > dhcli/main-function.json
-export FUNCTION_IMAGE="$(jq -er '.spec.image | select(length > 0)' dhcli/main-function.json)"
-printf '%s\n' "$FUNCTION_IMAGE"
+dhcli get -p "$PROJECT_NAME" -o yaml functions "$FUNCTION_ID"
 ```
 
 The [Python build operation](https://scc-digitalhub.github.io/docs/0.15/runtimes/python/)
-prepares an image for subsequent executions. Proceed only once the image
-reference is populated. A previously built function can start directly at step 6
+prepares an image for subsequent executions. Read `spec.image` in the YAML
+output and proceed only once it is populated. A previously built function can start directly at step 6
 after retrieving its ID and checking its image.
 
 ## 6. Run the main helper function on the cluster
 
-Generate `dhcli/job.yaml` with the input keys recorded in step 3:
+Create `dhcli/job.yaml` with the input keys copied in step 3. The unquoted
+heredoc delimiter allows Bash to insert the variables into the YAML:
 
 ```bash
-python3 - <<'PY'
-import json
-import os
-from pathlib import Path
-
-definition = {
-    'spec': {
-        'inputs': {
-            'csv_file': os.environ['CSV_KEY'],
-            'config_file': os.environ['CONFIG_KEY'],
-        },
-        'parameters': {'output_artifact_name': 'output_data'},
-        'resources': {'cpu': '4', 'mem': '8Gi', 'disk': '20Gi'},
-        'local_execution': False,
-    },
-}
-Path('dhcli/job.yaml').write_text(json.dumps(definition, indent=2) + '\n')
-PY
+cat > dhcli/job.yaml <<YAML
+spec:
+  inputs:
+    csv_file: "$CSV_KEY"
+    config_file: "$CONFIG_KEY"
+  parameters:
+    output_artifact_name: output_data
+  resources:
+    cpu: "4"
+    mem: "8Gi"
+    disk: "20Gi"
+  local_execution: false
+YAML
 
 dhcli run -p "$PROJECT_NAME" -i "$FUNCTION_ID" \
   -f dhcli/job.yaml python+job
@@ -339,11 +331,13 @@ The helper explicitly logs an **artifact**, not a Digitalhub Model entity. Find
 
 ```bash
 dhcli list -p "$PROJECT_NAME" artifacts -n output_data
-dhcli get -p "$PROJECT_NAME" -o json artifacts -n output_data \
-  > dhcli/output-artifact.json
-jq '{id, name, state: .status.state, metadata, files: .status.files}' \
-  dhcli/output-artifact.json
-export OUTPUT_ID="$(jq -er '.id' dhcli/output-artifact.json)"
+dhcli get -p "$PROJECT_NAME" -o yaml artifacts -n output_data
+```
+
+Copy the ID of the output artifact produced by your job, then download it:
+
+```bash
+export OUTPUT_ID='<output-artifact-id>'
 dhcli download -p "$PROJECT_NAME" artifact "$OUTPUT_ID" \
   -d results/output_data
 ```
@@ -356,38 +350,24 @@ from the list rather than assuming the latest one belongs to your run.
 
 ## 8. Reuse the pipeline or update its code
 
-- **New terminal session:** reconnect/select `atlas`, set `PROJECT_NAME`, fetch
-  the two artifacts and calculate their keys in step 3, then retrieve the function
-  and `FUNCTION_ID` in step 4. If its image exists, continue with step 6.
+- **New terminal session:** select `atlas`, set `PROJECT_NAME`, retrieve the
+  artifacts and copy their keys in step 3, then retrieve the function and copy
+  its ID in step 4. If its image exists, continue with step 6.
 - **Different data or configuration:** upload the changed files in step 3,
-  retrieve the intended versions, recalculate their keys, and regenerate
-  `dhcli/job.yaml`. Change `output_artifact_name` there to distinguish experiments.
-  Reuse the built function when code and dependencies are unchanged.
-- **Changed source:** repeat packaging and source upload in step 4, regenerate
-  the definition, and create a new function version. Retrieve its new ID, build
-  that version, and submit the job with that same ID. Rebuild whenever dependencies
-  change. This is also a straightforward option for code-only changes.
+  retrieve the intended versions, copy their keys, and recreate `dhcli/job.yaml`.
+  Change `output_artifact_name` there to distinguish experiments. Reuse the built
+  function when code and dependencies are unchanged.
+- **Changed source:** upload the updated archive, set its new `SOURCE_PATH`,
+  recreate the function YAML, and register a new function version. Copy its new
+  ID, build that version, and submit the job with that same ID. Rebuild whenever
+  dependencies change.
 
-For the notebook's code-only image-reuse option, first retrieve the existing
-function's image as in step 5. After generating the new definition with the new
-source, add that image before creating the new version:
-
-```bash
-python3 - <<'PY'
-import json
-import os
-from pathlib import Path
-
-path = Path('dhcli/main-function.yaml')
-definition = json.loads(path.read_text())
-definition['spec']['image'] = os.environ['FUNCTION_IMAGE']
-path.write_text(json.dumps(definition, indent=2) + '\n')
-PY
-```
-
-Then execute the function creation, retrieval, and `FUNCTION_ID` assignment from
-step 4 and proceed to step 6. Use this shortcut only when the existing image
-already contains all required dependencies; otherwise build the new version.
+For the notebook's code-only image-reuse option, retrieve the old function in
+YAML format and copy `spec.image`. Add `image: "<existing-image-reference>"`
+under `spec` in the new function YAML, alongside `python_version`, before
+creating the new version. Keep the new source address. Then retrieve the new
+function's ID and proceed to step 6. Use this shortcut only when the existing
+image contains all required dependencies; otherwise build the new version.
 
 The CLI's create/get/list/run/log/download syntax is documented in the
 [Digitalhub 0.15 command reference](https://scc-digitalhub.github.io/docs/0.15/cli/commands/).
