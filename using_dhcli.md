@@ -138,6 +138,17 @@ building, and execution are separate operations. The handler is the existing
 downloads the input artifacts, calls the ML program, and logs
 `local_data/results` as an output artifact. None of that code needs rewriting.
 
+The notebook's short `project.new_function(...)` call also prepares the local
+files: the SDK archives and uploads the `code_src` directory and resolves the
+requirements file into the function definition. The directory-upload behavior
+is implemented in the SDK runtime's
+[source preparation code](https://github.com/scc-digitalhub/digitalhub-sdk-runtime-python/blob/0.15.0/digitalhub_runtime_python/entities/function/python/utils.py).
+By comparison, the CLI's
+[create implementation](https://github.com/scc-digitalhub/digitalhub-cli-sdk/blob/v0.2.4/sdk/services/crud/create.go)
+reads a YAML definition and sends it to Core; it does not perform that local
+source preparation. The longer procedure below exposes that preparation for a
+first registration using only the CLI. It is not required for each execution.
+
 **If `main_function` is already registered with the correct source and
 dependencies**, skip source upload and declaration below. Retrieve it:
 
@@ -154,6 +165,18 @@ export FUNCTION_ID='<function-id>'
 Use this same ID for building and running. If you want a specific version, use
 its ID instead of `-n main_function`. Continue with step 5, or step 6 if this
 version already has a built image.
+
+You can inspect or save the definition that the notebook already registered,
+including its stored source reference and resolved dependencies:
+
+```bash
+dhcli get -p "$PROJECT_NAME" -o yaml functions "$FUNCTION_ID" \
+  > dhcli/main-function.yaml
+```
+
+This avoids repackaging the code or reconstructing the requirements when you
+continue using that registered function. A local source folder alone is different
+from a function already registered in Core.
 
 ### First registration: use the existing code archive
 
