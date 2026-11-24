@@ -7,6 +7,10 @@ resource settings. Run the steps in order in the same Bash terminal, from the
 repository root (the directory containing `main.ipynb`). The commands submit work
 to Digitalhub; training happens on the cluster.
 
+If your terminal is currently inside `oneClick-ML`, run `cd ..` first. All paths
+below are relative to its parent directory, even if this guide is stored inside
+`oneClick-ML`.
+
 ## 1. Prepare the CLI and the input files
 
 Install a `dhcli` release compatible with Digitalhub 0.15 for your operating system
@@ -178,6 +182,9 @@ This avoids repackaging the code or reconstructing the requirements when you
 continue using that registered function. A local source folder alone is different
 from a function already registered in Core.
 
+<details>
+<summary>First registration from local files using only dhcli</summary>
+
 ### First registration: use the existing code archive
 
 For a function that is not registered yet, the source must be accessible to the
@@ -223,7 +230,22 @@ pins into a YAML list; it does not execute Python or alter the ML code. The CLI
 needs dependency values in the definition, rather than a workspace-only path to
 `requirements.txt`.
 
+Run this block from the **parent of `oneClick-ML`**. If you are inside
+`oneClick-ML`, run `cd ..` first. The subshell stops on errors so registration
+does not continue after a failed file operation. It also checks the variables
+set in the earlier steps.
+
 ```bash
+(
+set -e
+: "${PROJECT_NAME:?Set PROJECT_NAME to your Digitalhub project name}"
+: "${SOURCE_PATH:?Set SOURCE_PATH to the uploaded source ZIP S3 path}"
+if [ ! -r oneClick-ML/requirements.txt ]; then
+  printf '%s\n' 'Run this block from the parent of oneClick-ML.' >&2
+  exit 1
+fi
+mkdir -p dhcli
+
 cat > dhcli/main-function.yaml <<YAML
 kind: python
 name: main_function
@@ -246,12 +268,15 @@ done < oneClick-ML/requirements.txt
 
 dhcli create -p "$PROJECT_NAME" functions -f dhcli/main-function.yaml
 dhcli get -p "$PROJECT_NAME" functions -n main_function
+)
 ```
 
 Copy the new `ID:` into `FUNCTION_ID` as shown above. The nested
 `spec.source.source` and `spec.source.handler` fields represent the SDK's
 `code_src` and `handler` arguments; see the version 0.15
 [source schema](https://github.com/scc-digitalhub/digitalhub-sdk-runtime-python/blob/0.15.0/digitalhub_runtime_python/entities/function/python/models.py).
+
+</details>
 
 ## 5. Build the main helper function
 
@@ -268,8 +293,14 @@ YAML
 
 dhcli run -p "$PROJECT_NAME" -i "$FUNCTION_ID" \
   -f dhcli/build.yaml python+build
-dhcli list -p "$PROJECT_NAME" runs -k 'python+build:run'
+dhcli list -p "$PROJECT_NAME" runs
 ```
+
+In the list, look for `KIND` equal to `python+build:run`. Listing all runs avoids
+an encoding problem observed with the `-k` filter: a literal `+` can arrive at
+Core as a space (`python build:run`), causing HTTP 400. Shell quotes do not fix
+HTTP query encoding. This list error does not establish whether the separately
+submitted build succeeded or failed; inspect its run before submitting another.
 
 `dhcli run` submits asynchronously. Unlike the notebook's `wait=True`, command
 success only confirms submission. Select the build run belonging to this function
@@ -320,8 +351,11 @@ YAML
 
 dhcli run -p "$PROJECT_NAME" -i "$FUNCTION_ID" \
   -f dhcli/job.yaml python+job
-dhcli list -p "$PROJECT_NAME" runs -k 'python+job:run'
+dhcli list -p "$PROJECT_NAME" runs
 ```
+
+Select the training run with `KIND` equal to `python+job:run`. As with the build,
+list without `-k` to avoid the plus-sign encoding issue.
 
 The argument names `csv_file`, `config_file`, and `output_artifact_name` must match
 `helper_main`. Artifact references belong in `inputs`; the output name belongs in
